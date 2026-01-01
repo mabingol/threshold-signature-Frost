@@ -13,6 +13,8 @@ use sha3::{Digest, Keccak256};
 use signature::DigestSigner;
 use std::collections::BTreeMap;
 use wasm_bindgen::prelude::*;
+use k256::ecdsa::VerifyingKey as EcdsaVerifyingKey;
+use frost_secp256k1::Field; // For serialize() on ScalarField
 
 // Use Secp256k1 FROST only (Threshold Key is always Secp256k1)
 use frost_secp256k1 as frost;
@@ -386,7 +388,7 @@ pub fn dkg_part2(
     let secret_pkg: frost::keys::dkg::round1::SecretPackage = bincode::deserialize(
         &hex::decode(secret_package_hex).map_err(|e| JsError::new(&e.to_string()))?,
     )
-    .map_err(|e| JsError::new(&e.to_string()))?;
+        .map_err(|e| JsError::new(&e.to_string()))?;
     let round1_packages_str: BTreeMap<String, String> =
         serde_wasm_bindgen::from_value(round1_packages_hex)?;
 
@@ -433,7 +435,7 @@ pub fn dkg_part3(
     let secret_pkg: frost::keys::dkg::round2::SecretPackage = bincode::deserialize(
         &hex::decode(secret_package_hex).map_err(|e| JsError::new(&e.to_string()))?,
     )
-    .map_err(|e| JsError::new(&e.to_string()))?;
+        .map_err(|e| JsError::new(&e.to_string()))?;
     let round1_packages_str: BTreeMap<String, String> =
         serde_wasm_bindgen::from_value(round1_packages_hex)?;
     let round2_packages_str: BTreeMap<String, String> =
@@ -494,7 +496,7 @@ pub fn get_key_package_metadata(key_package_hex: &str) -> Result<String, JsError
     let key_package_with_metadata: KeyPackageWithMetadata = bincode::deserialize(
         &hex::decode(key_package_hex).map_err(|e| JsError::new(&e.to_string()))?,
     )
-    .map_err(|e| JsError::new(&e.to_string()))?;
+        .map_err(|e| JsError::new(&e.to_string()))?;
     let response = serde_json::json!({
         "group_id": key_package_with_metadata.group_id,
         "threshold": key_package_with_metadata.threshold,
@@ -510,7 +512,7 @@ pub fn get_signing_prerequisites(key_package_hex: &str) -> Result<String, JsErro
     let key_package_with_metadata: KeyPackageWithMetadata = bincode::deserialize(
         &hex::decode(key_package_hex).map_err(|e| JsError::new(&e.to_string()))?,
     )
-    .map_err(|e| JsError::new(&e.to_string()))?;
+        .map_err(|e| JsError::new(&e.to_string()))?;
     let key_package = key_package_with_metadata.key_package;
 
     let response = serde_json::json!({
@@ -525,7 +527,7 @@ pub fn sign_part1_commit(key_package_hex: &str) -> Result<String, JsError> {
     let key_package_with_metadata: KeyPackageWithMetadata = bincode::deserialize(
         &hex::decode(key_package_hex).map_err(|e| JsError::new(&e.to_string()))?,
     )
-    .map_err(|e| JsError::new(&e.to_string()))?;
+        .map_err(|e| JsError::new(&e.to_string()))?;
     let key_package = key_package_with_metadata.key_package;
     let (nonces, commitments) = frost::round1::commit(key_package.signing_share(), &mut OsRng);
 
@@ -545,7 +547,7 @@ pub fn sign_part2_sign(
     let key_package_with_metadata: KeyPackageWithMetadata = bincode::deserialize(
         &hex::decode(key_package_hex).map_err(|e| JsError::new(&e.to_string()))?,
     )
-    .map_err(|e| JsError::new(&e.to_string()))?;
+        .map_err(|e| JsError::new(&e.to_string()))?;
     let key_package = key_package_with_metadata.key_package;
     let nonces: frost::round1::SigningNonces =
         bincode::deserialize(&hex::decode(nonces_hex).map_err(|e| JsError::new(&e.to_string()))?)
@@ -553,7 +555,7 @@ pub fn sign_part2_sign(
     let signing_package: frost::SigningPackage = bincode::deserialize(
         &hex::decode(signing_package_hex).map_err(|e| JsError::new(&e.to_string()))?,
     )
-    .map_err(|e| JsError::new(&e.to_string()))?;
+        .map_err(|e| JsError::new(&e.to_string()))?;
 
     let signature_share = frost::round2::sign(&signing_package, &nonces, &key_package)
         .map_err(|e| JsError::new(&e.to_string()))?;
@@ -768,4 +770,145 @@ pub fn to_compressed_point(uncompressed_point_hex: &str) -> Result<String, JsErr
        "point": hex::encode(point.compress().as_bytes()),
     });
     Ok(response.to_string())
+}
+// ====================================================================
+// region: Server/Coordinator Aggregation Logic
+// ====================================================================
+
+#[wasm_bindgen]
+pub fn compute_signing_package(
+    commitments_map_js: JsValue,
+    msg32_hex: &str,
+) -> Result<String, JsError> {
+    let commitments_str: BTreeMap<String, String> =
+        serde_wasm_bindgen::from_value(commitments_map_js)?;
+    let msg32_bytes = hex::decode(msg32_hex.trim_start_matches("0x"))
+        .map_err(|e| JsError::new(&format!("Invalid msg32 hex: {}", e)))?;
+    let msg32: [u8; 32] = msg32_bytes
+        .try_into()
+        .map_err(|_| JsError::new("msg32 must be 32 bytes"))?;
+
+    let mut commitments = BTreeMap::new();
+    for (id_hex, comm_hex) in commitments_str {
+        let id_bytes = hex::decode(id_hex).map_err(|e| JsError::new(&e.to_string()))?;
+        let id_array: [u8; 32] = id_bytes
+            .try_into()
+            .map_err(|_| JsError::new("Identifier hex must be 32 bytes"))?;
+        let id =
+            frost::Identifier::deserialize(&id_array).map_err(|e| JsError::new(&e.to_string()))?;
+        let comm: frost::round1::SigningCommitments =
+            bincode::deserialize(&hex::decode(comm_hex).map_err(|e| JsError::new(&e.to_string()))?)
+                .map_err(|e| JsError::new(&e.to_string()))?;
+        commitments.insert(id, comm);
+    }
+
+    let sp = frost::SigningPackage::new(commitments, &msg32);
+    Ok(hex::encode(bincode::serialize(&sp).unwrap()))
+}
+
+#[wasm_bindgen]
+pub fn aggregate_signatures(
+    signing_package_hex: &str,
+    signature_shares_map_js: JsValue,
+    verifying_shares_map_js: JsValue,
+    group_vk_hex: &str,
+) -> Result<String, JsError> {
+    // 1. Reconstruct SigningPackage
+    let sp: frost::SigningPackage = bincode::deserialize(
+        &hex::decode(signing_package_hex).map_err(|e| JsError::new(&e.to_string()))?,
+    )
+        .map_err(|e| JsError::new(&e.to_string()))?;
+
+    // 2. Reconstruct Signature Shares Map
+    let sig_shares_str: BTreeMap<String, String> =
+        serde_wasm_bindgen::from_value(signature_shares_map_js)?;
+    let mut sig_shares = BTreeMap::new();
+    for (id_hex, share_hex) in sig_shares_str {
+        let id: frost::Identifier =
+            bincode::deserialize(&hex::decode(id_hex).map_err(|e| JsError::new(&e.to_string()))?)
+                .map_err(|e| JsError::new(&e.to_string()))?;
+        let share: frost::round2::SignatureShare = bincode::deserialize(
+            &hex::decode(share_hex).map_err(|e| JsError::new(&e.to_string()))?,
+        )
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        sig_shares.insert(id, share);
+    }
+
+    // 3. Reconstruct PublicKeyPackage
+    // Need verifying shares + group key
+    let vshares_str: BTreeMap<String, String> =
+        serde_wasm_bindgen::from_value(verifying_shares_map_js)?;
+    let mut vshares = BTreeMap::new();
+    for (id_hex, vshare_hex) in vshares_str {
+        let id: frost::Identifier =
+            bincode::deserialize(&hex::decode(id_hex).map_err(|e| JsError::new(&e.to_string()))?)
+                .map_err(|e| JsError::new(&e.to_string()))?;
+        let vshare: frost::keys::VerifyingShare = bincode::deserialize(
+            &hex::decode(vshare_hex).map_err(|e| JsError::new(&e.to_string()))?,
+        )
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        vshares.insert(id, vshare);
+    }
+
+    let group_vk_bytes = hex::decode(group_vk_hex).map_err(|e| JsError::new(&e.to_string()))?;
+    let group_vk = frost::VerifyingKey::deserialize(&group_vk_bytes)
+        .map_err(|e| JsError::new(&format!("Invalid group VK: {}", e)))?;
+
+    let pubkey_package = frost::keys::PublicKeyPackage::new(vshares, group_vk);
+
+    // 4. Aggregate
+    let sig_final = frost::aggregate(&sp, &sig_shares, &pubkey_package)
+        .map_err(|e| JsError::new(&format!("Aggregation failed: {}", e)))?;
+
+    // Return final signature as bincode hex, AND details (r, s, etc) for convenience if needed?
+    // For now, mirroring fserver's primary output (sig_final serialized)
+    // But fserver also extracts px, py, rx, ry, s.
+    // Let's return a JSON object with everything.
+
+    let sig_hex = hex::encode(bincode::serialize(&sig_final).unwrap());
+
+    // Extract components for detailed response
+    let vk_parsed = EcdsaVerifyingKey::from_sec1_bytes(&group_vk_bytes)
+        .map_err(|e| JsError::new(&e.to_string()))?
+        .to_encoded_point(false);
+    let px = hex::encode(vk_parsed.x().unwrap());
+    let py = hex::encode(vk_parsed.y().unwrap());
+
+    let r_aff = sig_final.R().to_affine();
+    let r_pt = r_aff.to_encoded_point(false);
+    let rx = hex::encode(r_pt.x().unwrap());
+    let ry = hex::encode(r_pt.y().unwrap());
+
+    let z_bytes = frost::Secp256K1ScalarField::serialize(sig_final.z());
+    let s_scalar = hex::encode(z_bytes);
+
+    let response = serde_json::json!({
+        "signature_bincode_hex": sig_hex,
+        "px": px,
+        "py": py,
+        "rx": rx,
+        "ry": ry,
+        "s": s_scalar
+    });
+
+    Ok(response.to_string())
+}
+
+// ====================================================================
+// region: Verification
+// ====================================================================
+
+#[wasm_bindgen]
+pub fn verify_signature(
+    roster_pub_json: JsValue,
+    payload_hex: &str,
+    signature_hex: &str,
+) -> Result<bool, JsError> {
+    let pk: helper::RosterPublicKey = serde_wasm_bindgen::from_value(roster_pub_json)?;
+    let payload = hex::decode(payload_hex).map_err(|e| JsError::new(&e.to_string()))?;
+
+    match pk.verify(&payload, signature_hex) {
+        Ok(_) => Ok(true),
+        Err(e) => Err(JsError::new(&e.to_string())),
+    }
 }
