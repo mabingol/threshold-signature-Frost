@@ -42,7 +42,7 @@ fn test_generate_and_derive_keys() {
     let pk = VerifyingKey::from_sec1_bytes(
         &hex::decode(pub_key_hex).expect("Failed to decode public key hex"),
     )
-    .expect("Failed to create VerifyingKey from SEC1 bytes");
+        .expect("Failed to create VerifyingKey from SEC1 bytes");
     assert_eq!(
         &VerifyingKey::from(&sk.public_key()),
         &pk,
@@ -69,7 +69,7 @@ fn test_generate_and_derive_keys() {
     let derived_pk = VerifyingKey::from_sec1_bytes(
         &hex::decode(derived_pub_hex).expect("Failed to decode derived public key hex"),
     )
-    .expect("Failed to create VerifyingKey from derived SEC1 bytes");
+        .expect("Failed to create VerifyingKey from derived SEC1 bytes");
     assert_eq!(
         &VerifyingKey::from(&derived_sk.public_key()),
         &derived_pk,
@@ -222,7 +222,7 @@ fn test_dkg_and_signing_round_trip() {
         roster.clone(),
         "ecdsa",
     )
-    .unwrap();
+        .unwrap();
     let p1_part3: serde_json::Value = serde_json::from_str(&p1_part3_json).unwrap();
     let p1_key_package_hex = p1_part3["key_package_hex"].as_str().unwrap();
     let group_public_key_hex = p1_part3["group_public_key_hex"].as_str().unwrap();
@@ -238,7 +238,7 @@ fn test_dkg_and_signing_round_trip() {
         roster.clone(),
         "ecdsa",
     )
-    .unwrap();
+        .unwrap();
     let p2_part3: serde_json::Value = serde_json::from_str(&p2_part3_json).unwrap();
     let p2_key_package_hex = p2_part3["key_package_hex"].as_str().unwrap();
 
