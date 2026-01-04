@@ -3,18 +3,35 @@ import react from '@vitejs/plugin-react';
 import wasm from 'vite-plugin-wasm';
 import topLevelAwait from 'vite-plugin-top-level-await';
 import path from 'path';
+import init from 'tokamak-frost-wasm';
+// @ts-ignore - Importing from sibling package source
+import { FServer } from '../ts-fserver/src/server.ts';
 
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [
     react(),
     wasm(),
-    topLevelAwait()
+    topLevelAwait(),
+    {
+      name: 'configure-fserver',
+      configureServer(server) {
+        init().then(() => {
+          console.log('WASM module initialized for FServer. ' + server.ws.name);
+          try {
+            new FServer(9034);
+          } catch (e) {
+            console.error("Failed to start FServer:", e);
+          }
+        }).catch((e) => {
+          console.error("Failed to initialize WASM for FServer:", e);
+        });
+      }
+    }
   ],
   server: {
     fs: {
-      // pkg directory is now local to web/
-      allow: ['.'],
+      allow: ['..'], // Allow serving files from parent directory (node_modules, related packages)
     },
   },
   optimizeDeps: {

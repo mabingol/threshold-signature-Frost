@@ -59,11 +59,13 @@ cleanup() {
     pkill -f "cargo run -p fserver" 2>/dev/null || true
     
     # Kill processes using port directly (more aggressive)
-    if command -v fuser &> /dev/null; then
+    # Note: fuser on Linux supports -k and tcp ports, but macOS fuser has different syntax
+    # We check for Linux fuser specifically and fall back to lsof on macOS
+    if [[ "$(uname)" == "Linux" ]] && command -v fuser &> /dev/null; then
         fuser -k $BIND_PORT/tcp 2>/dev/null || true
     fi
     
-    # Also try lsof approach to find and kill processes on the port
+    # Use lsof approach to find and kill processes on the port (works on both Linux and macOS)
     if command -v lsof &> /dev/null; then
         for pid in $(lsof -iTCP:$BIND_PORT -sTCP:LISTEN -t 2>/dev/null); do
             kill -9 $pid 2>/dev/null || true
@@ -238,23 +240,55 @@ test_ts_integration() {
 test_web_dev_server() {
     print_header "Testing Web Dev Server"
     
-    # Start web dev server briefly to check it works
-    print_info "Starting Vite dev server..."
-    npm run dev:web &
+    # Note: npm run dev:web starts BOTH the Vite frontend AND the ts-fserver
+    # on port 9034 via the configure-fserver Vite plugin in vite.config.ts.
+    # This test verifies both services start correctly together.
+    
+    # Start web dev server briefly to check it works (redirect stderr to suppress npm lifecycle errors on kill)
+    print_info "Starting Vite dev server (includes embedded ts-fserver on port 9034)..."
+    npm run dev:web 2>/dev/null &
     WEB_PID=$!
     
-    # Wait for Vite to be ready
+    # Wait for Vite and embedded server to be ready
     sleep 5
     
-    # Check if it's responding
+    local vite_ok=false
+    local server_ok=false
+    
+    # Check if Vite frontend is responding
     if curl -s http://localhost:5173 >/dev/null 2>&1; then
-        print_success "Web dev server started successfully"
-        kill $WEB_PID 2>/dev/null || true
+        print_success "Vite frontend started successfully"
+        vite_ok=true
+    else
+        print_failure "Vite frontend failed to start"
+    fi
+    
+    # Check if embedded ts-fserver is responding on port 9034
+    if nc -z 127.0.0.1 $BIND_PORT >/dev/null 2>&1; then
+        print_success "Embedded ts-fserver started successfully on port $BIND_PORT"
+        server_ok=true
+    else
+        print_failure "Embedded ts-fserver failed to start on port $BIND_PORT"
+    fi
+    
+    # Graceful cleanup: send SIGTERM first, then wait briefly for clean exit
+    # This suppresses the noisy npm "Lifecycle script failed" errors
+    {
+        kill -TERM $WEB_PID 2>/dev/null || true
+        pkill -TERM -P $WEB_PID 2>/dev/null || true
+        sleep 1
+        # Force kill if still running
+        kill -9 $WEB_PID 2>/dev/null || true
+        pkill -9 -P $WEB_PID 2>/dev/null || true
+    } 2>/dev/null
+    
+    # Wait for the background job to finish (suppresses shell job control messages)
+    wait $WEB_PID 2>/dev/null || true
+    
+    if $vite_ok && $server_ok; then
         return 0
     else
-        print_failure "Web dev server failed to start"
         FAILED_TESTS+=("Web Dev Server")
-        kill $WEB_PID 2>/dev/null || true
         return 1
     fi
 }

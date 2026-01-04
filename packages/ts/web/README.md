@@ -49,7 +49,7 @@ npm run dev:web
 ### From web Directory
 
 ```bash
-# Start Vite development server
+# Start integrated development server (Vite + fserver)
 npm run dev
 
 # Production build

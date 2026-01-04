@@ -43,9 +43,9 @@ Session‑based Distributed Key Generation (DKG) and Schnorr threshold signing w
 ## Architecture
 
 ```
- +----------+         ws://host:port/ws          +-----------+
+ +----------+         ws://host:port/ws           +-----------+
  | Creator  |  ─────────────────────────────────▶|           |
- | (client) |   CreateSession → session_id       |           |
+ | (client) |   CreateSession → session_id        |           |
  +----------+                                     |  fserver  |
        ▲     JoinSession(session_id)              | (coord.)  |
        │     …                                    |           |
@@ -130,15 +130,17 @@ This builds to `packages/ts/shared-wasm/pkg/` and works in both browser and Node
 
 ### Option 1: Web UI (Recommended)
 
-Start both the TypeScript server and web frontend:
+Start the integrated development environment:
 
 ```bash
-# Terminal 1: Start the coordinator server
-npm run dev:server
-
-# Terminal 2: Start the web frontend
 npm run dev:web
 ```
+
+This single command starts **both**:
+- **Vite frontend** at http://localhost:5173
+- **TypeScript coordinator server** (ts-fserver) at ws://127.0.0.1:9034/ws
+
+The ts-fserver is automatically embedded via a Vite plugin, so you get a complete development environment with one command.
 
 Open **http://localhost:5173** in your browser to access the DKG and Signing pages.
 
@@ -166,9 +168,11 @@ make clean out=run_dkg
 | Command | Description |
 |---------|-------------|
 | `npm run build:wasm` | Build WASM to `shared-wasm/pkg/` (universal) |
-| `npm run dev:web` | Start Vite dev server for React frontend |
-| `npm run dev:server` | Start TypeScript coordinator server (dev mode) |
-| `npm run start:server` | Start TypeScript coordinator server (production) |
+| `npm run dev:web` | Start Vite + embedded ts-fserver (recommended for development) |
+| `npm run dev:server` | Start TypeScript coordinator server only (dev mode) |
+| `npm run start:server` | Start TypeScript coordinator server only (production) |
+
+> **Note:** `npm run dev:web` automatically starts the ts-fserver on port 9034 via a Vite plugin (`vite.config.ts`). You don't need to run `dev:server` or `start:server` separately when using the web UI.
 
 ### Web Frontend
 
@@ -181,9 +185,9 @@ Features:
 - Upload/download encrypted key packages
 - Real-time ceremony progress
 
-### TypeScript Server
+### TypeScript Server (Standalone)
 
-The `ts-fserver` is a Node.js alternative to the Rust `fserver`:
+If you need to run the ts-fserver separately (without the web UI):
 
 ```bash
 # Development (with hot reload)
@@ -390,10 +394,12 @@ This keeps enrollment stateless and automatable.
 Execute the comprehensive test suite:
 
 ```bash
-./test_all.sh
+bash test_all.sh
 ```
 
-This script runs:
+**Cross-platform support:** Works on macOS, Linux, and Windows WSL.
+
+The test script runs:
 
 | Test | Description |
 |------|-------------|
@@ -402,7 +408,7 @@ This script runs:
 | **Makefile DKG (secp256k1)** | 2-of-2 DKG with ECDSA keys |
 | **Makefile DKG (EdDSA)** | 2-of-2 DKG with EdwardsOnBls12381 keys |
 | **TypeScript Integration** | Full DKG + Signing flow via ts-fserver |
-| **Web Dev Server** | Smoke test for Vite dev server |
+| **Web Dev Server** | Verifies Vite starts with embedded ts-fserver |
 
 ### Individual Tests
 
