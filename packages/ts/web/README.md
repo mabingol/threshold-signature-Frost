@@ -8,6 +8,8 @@ React-based web client for FROST Distributed Key Generation (DKG) and threshold 
 - **Deterministic Key Derivation**: Derives keys from MetaMask wallet signature
 - **Secure Key Storage**: DKG shares encrypted with AES-256-GCM
 - **Interactive Ceremonies**: Real-time WebSocket communication for DKG and Signing
+- **Unified Port Architecture**: Frontend and WebSocket server run on the same port
+- **Security Headers**: CSP, X-Content-Type-Options, and Referrer-Policy
 
 ## Project Structure
 
@@ -42,14 +44,18 @@ npm run build:wasm
 # Install all workspace dependencies
 npm install
 
-# Start web development server
+# Start unified development server (Vite + ts-fserver on same port)
 npm run dev:web
 ```
+
+This starts a unified server at **http://localhost:5173** with:
+- Frontend served by Vite
+- WebSocket server (ts-fserver) at `/frost-ws` on the same port
 
 ### From web Directory
 
 ```bash
-# Start integrated development server (Vite + fserver)
+# Start integrated development server (Vite + ts-fserver on single port)
 npm run dev
 
 # Production build
@@ -74,7 +80,26 @@ npm run preview
 | Script | Description |
 |--------|-------------|
 | `npm run build:wasm` | Build WASM from `packages/rust/wasm` → `packages/ts/shared-wasm/pkg` |
-| `npm run dev:web` | Start web client in development mode |
+| `npm run dev:web` | Start unified web client + ts-fserver (single port) |
+
+## Security
+
+The web client implements several security measures:
+
+### Content Security Policy (CSP)
+Restricts resource loading to prevent XSS attacks:
+- Scripts: Only from same origin and WASM
+- Connections: Same origin WebSocket (ws/wss)
+- Styles: Same origin and inline (for React)
+
+### WebSocket Origin Validation
+The ts-fserver validates WebSocket connection origins:
+- Allows same-origin connections
+- Allows localhost for development
+- Rejects cross-origin connections from unknown origins
+
+### HTTPS Support
+The client automatically uses `wss://` (secure WebSocket) when served over HTTPS.
 
 ## Cryptographic Key Types
 

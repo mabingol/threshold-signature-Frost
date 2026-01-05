@@ -17,9 +17,10 @@ export default defineConfig({
       name: 'configure-fserver',
       configureServer(server) {
         init().then(() => {
-          console.log('WASM module initialized for FServer. ' + server.ws.name);
+          console.log('WASM module initialized for FServer.');
           try {
-            new FServer(9034);
+            // Attach FServer to Vite's HTTP server at /frost-ws path
+            new FServer({ server: server.httpServer!, path: '/frost-ws' });
           } catch (e) {
             console.error("Failed to start FServer:", e);
           }

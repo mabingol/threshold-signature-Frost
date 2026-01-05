@@ -216,8 +216,6 @@ function SigningPage() {
     const { signMessageAsync } = useSignMessage();
 
     // --- State for Connection & Keys ---
-    const [ip, setIp] = useState('127.0.0.1');
-    const [port, setPort] = useState('9034');
     const [privateKey, setPrivateKey] = useState('');
     const [publicKey, setPublicKey] = useState('');
     const [keyType, setKeyType] = useState<'secp256k1' | 'edwards_on_bls12381'>('edwards_on_bls12381');
@@ -498,8 +496,10 @@ function SigningPage() {
             toast.error('Please generate or provide roster keys before connecting.');
             return;
         }
-        const url = `ws://${ip}:${port}/ws`;
-        log('info', `Connecting to ${url}...`);
+        // Use secure WebSocket (wss) for HTTPS, regular (ws) for HTTP
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const url = `${wsProtocol}//${window.location.host}/frost-ws`;
+        log('info', 'Connecting to server...');
         setSigningStatus('Connecting');
         const socket = new WebSocket(url);
         ws.current = socket;
@@ -736,14 +736,6 @@ function SigningPage() {
                         />
                         <small style={{ color: '#aaa' }}>Loaded from key file</small>
                     </div>
-                    <hr />
-                    <div className="form-group">
-                        <label>F-Server IP:Port</label>
-                        <div style={{ display: 'flex', gap: '10px' }}>
-                            <input type="text" value={ip} onChange={e => setIp(e.target.value)} disabled={isServerConnected} style={{ flex: 3 }} />
-                            <input type="text" value={port} onChange={e => setPort(e.target.value)} disabled={isServerConnected} style={{ flex: 1 }} />
-                        </div>
-                    </div>
                     {isServerConnected ? (
                         <button onClick={handleDisconnect} className="disconnect-button">Disconnect</button>
                     ) : (
@@ -895,7 +887,7 @@ function SigningPage() {
                     </div>
                 </div>
             </div>
-        </div>
+        </div >
     );
 }
 

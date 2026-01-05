@@ -33,11 +33,47 @@ export class FServer {
     private completedDKGSessions: Map<string, any> = new Map();
     private completedSignSessions: Map<string, any> = new Map();
 
-    constructor(port: number) {
-        // Bind to 0.0.0.0 to ensure IPv4 access (fixes issues on Windows/Ubuntu where :: doesn't cover 127.0.0.1)
-        this.wss = new WebSocketServer({ port, host: '0.0.0.0' });
+    constructor(portOrServer: number | { server: import('http').Server; path?: string; allowedOrigins?: string[] }) {
+        if (typeof portOrServer === 'number') {
+            // Standalone mode: create own WebSocketServer on specified port
+            this.wss = new WebSocketServer({ port: portOrServer, host: '0.0.0.0' });
+            console.log(`ts-fserver started on port ${portOrServer} (bound to 0.0.0.0)`);
+        } else {
+            // Attached mode: use noServer to manually handle upgrades for specific path
+            const wsPath = portOrServer.path || '/frost-ws';
+            const allowedOrigins = portOrServer.allowedOrigins || [];
+            this.wss = new WebSocketServer({ noServer: true });
+
+            // Only handle upgrade requests for our specific path
+            portOrServer.server.on('upgrade', (request, socket, head) => {
+                const pathname = new URL(request.url || '', `http://${request.headers.host}`).pathname;
+                if (pathname === wsPath) {
+                    // Origin validation for security
+                    const origin = request.headers.origin;
+                    const host = request.headers.host || '';
+
+                    // Allow same-origin connections and localhost for development
+                    const isLocalhost = host.includes('localhost') || host.includes('127.0.0.1');
+                    const isSameOrigin = origin && (origin.includes(host) || host.includes(new URL(origin).host));
+                    const isAllowed = allowedOrigins.length === 0 || allowedOrigins.includes(origin || '');
+
+                    if (!isLocalhost && !isSameOrigin && !isAllowed) {
+                        console.warn(`Rejected WebSocket connection from origin: ${origin}`);
+                        socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+                        socket.destroy();
+                        return;
+                    }
+
+                    this.wss.handleUpgrade(request, socket, head, (ws) => {
+                        this.wss.emit('connection', ws, request);
+                    });
+                }
+                // Don't handle other paths - let Vite's HMR WebSocket work
+            });
+
+            console.log(`ts-fserver attached to HTTP server at path ${wsPath}`);
+        }
         this.wss.on('connection', (ws) => this.handleConnection(ws));
-        console.log(`ts-fserver started on port ${port} (bound to 0.0.0.0)`);
     }
 
     private handleConnection(ws: WebSocket) {

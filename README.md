@@ -43,9 +43,9 @@ Session‑based Distributed Key Generation (DKG) and Schnorr threshold signing w
 ## Architecture
 
 ```
- +----------+         ws://host:port/ws           +-----------+
+ +----------+         ws://host:port/ws          +-----------+
  | Creator  |  ─────────────────────────────────▶|           |
- | (client) |   CreateSession → session_id        |           |
+ | (client) |   CreateSession → session_id       |           |
  +----------+                                     |  fserver  |
        ▲     JoinSession(session_id)              | (coord.)  |
        │     …                                    |           |
@@ -136,11 +136,11 @@ Start the integrated development environment:
 npm run dev:web
 ```
 
-This single command starts **both**:
-- **Vite frontend** at http://localhost:5173
-- **TypeScript coordinator server** (ts-fserver) at ws://127.0.0.1:9034/ws
+This single command starts a **unified server** at http://localhost:5173 that includes:
+- **Vite frontend** serving the React web application
+- **TypeScript coordinator server** (ts-fserver) on the same port via WebSocket at `/frost-ws`
 
-The ts-fserver is automatically embedded via a Vite plugin, so you get a complete development environment with one command.
+The ts-fserver is automatically embedded via a Vite plugin, providing a complete development environment with one command and a single port.
 
 Open **http://localhost:5173** in your browser to access the DKG and Signing pages.
 
@@ -172,7 +172,7 @@ make clean out=run_dkg
 | `npm run dev:server` | Start TypeScript coordinator server only (dev mode) |
 | `npm run start:server` | Start TypeScript coordinator server only (production) |
 
-> **Note:** `npm run dev:web` automatically starts the ts-fserver on port 9034 via a Vite plugin (`vite.config.ts`). You don't need to run `dev:server` or `start:server` separately when using the web UI.
+> **Note:** `npm run dev:web` runs everything on a single port (5173). The ts-fserver is attached to Vite's HTTP server at the `/frost-ws` WebSocket path. You don't need to run `dev:server` separately when using the web UI.
 
 ### Web Frontend
 
