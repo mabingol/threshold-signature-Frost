@@ -40,11 +40,13 @@ export type ClientMsg =
 export type ServerMsg =
     | { type: 'Error', payload: { message: string } }
     | { type: 'Info', payload: { message: string } }
+    | { type: 'SessionAborted', payload: { session: string; reason: string } }
     | { type: 'Challenge', payload: { challenge: string } }
     | { type: 'LoginOk', payload: { principal: string; suid: number; access_token: string } }
 
     // DKG Session Updates
     | { type: 'DKGSessionCreated', payload: { session: string } }
+    | { type: 'NewDKGSession', payload: any } // Broadcast to all users when a new session is created
     | { type: 'PendingDKGSessions', payload: { sessions: any[] } } // Using 'any' for now, can refine DKGSessionSummary
     | { type: 'CompletedDKGSessions', payload: { sessions: any[] } }
 
@@ -57,6 +59,7 @@ export type ServerMsg =
 
     // Signing Session Updates
     | { type: 'SignSessionCreated', payload: { session: string } }
+    | { type: 'NewSignSession', payload: any } // Broadcast to all users when a new session is created
     | { type: 'SignSessionAnnounced', payload: any }
     | { type: 'PendingSigningSessions', payload: { sessions: any[] } }
     | { type: 'CompletedSigningSessions', payload: { sessions: any[] } }

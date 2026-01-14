@@ -99,9 +99,141 @@ export class FServer {
     }
 
     private handleDisconnect(socket: AuthenticatedSocket) {
+        console.log(`[handleDisconnect] Socket ${socket.id} disconnected. Checking ${this.dkgSessions.size} DKG sessions...`);
         this.connections.delete(socket.id);
-        // Logic for removing from sessions if needed, though usually sessions persist
-        // If a user disconnects mid-round, the session might stall.
+
+        // Clean up DKG sessions the user was part of
+        this.dkgSessions.forEach((session, sessionId) => {
+            const participants = Array.from(session.joined_participants.values());
+            console.log(`[handleDisconnect] Session ${sessionId}: ${participants.length} participants, socketIds: ${participants.map(p => p.socketId).join(', ')}`);
+
+            const participant = participants.find(p => p.socketId === socket.id);
+            if (!participant) {
+                console.log(`[handleDisconnect] Socket ${socket.id} not found in session ${sessionId}`);
+                return;
+            }
+
+            const uid = participant.uid;
+            session.joined_participants.delete(uid);
+            console.log(`[handleDisconnect] User ${uid} removed from DKG session ${sessionId}, state=${session.state}`);
+
+            // Helper to notify a socket about disconnect
+            const notifyDisconnect = (targetSocketId: string) => {
+                const pSocket = this.connections.get(targetSocketId);
+                if (pSocket) {
+                    this.send(pSocket.ws, {
+                        type: 'Info',
+                        payload: { message: `user ${uid} disconnected from session ${sessionId}` }
+                    });
+                }
+            };
+
+            // Helper to notify a socket about session abort
+            const notifyAbort = (targetSocketId: string) => {
+                const pSocket = this.connections.get(targetSocketId);
+                if (pSocket) {
+                    this.send(pSocket.ws, {
+                        type: 'SessionAborted',
+                        payload: { session: sessionId, reason: `Participant ${uid} disconnected` }
+                    });
+                }
+            };
+
+            // Helper to notify ALL configured participants (not just joined ones)
+            const notifyAllParticipants = (notifyFn: (socketId: string) => void) => {
+                const notifiedSockets = new Set<string>();
+                session.participants_pubs.forEach(([_, pubKey]) => {
+                    const pubKeyStr = typeof pubKey === 'string' ? pubKey : pubKey.key;
+                    const normalizedPubKey = pubKeyStr.toLowerCase().replace('0x', '');
+
+                    this.connections.forEach(conn => {
+                        if (conn.publicKey && conn.id !== socket.id && !notifiedSockets.has(conn.id)) {
+                            const connPubKey = conn.publicKey.toLowerCase().replace('0x', '');
+                            if (connPubKey === normalizedPubKey) {
+                                notifyFn(conn.id);
+                                notifiedSockets.add(conn.id);
+                            }
+                        }
+                    });
+                });
+                // Also notify the session creator if not already notified and not the disconnecting user
+                if (session.creatorSocketId !== socket.id && !notifiedSockets.has(session.creatorSocketId)) {
+                    notifyFn(session.creatorSocketId);
+                }
+            };
+
+            if (session.state === 'Pending') {
+                notifyAllParticipants(notifyDisconnect);
+            } else if (session.state === 'Round1' || session.state === 'Round2') {
+                // Session already started - must abort since protocol cannot recover
+                session.state = 'Failed';
+                notifyAllParticipants(notifyAbort);
+            }
+        });
+
+        // Clean up Sign sessions the user was part of
+        this.signSessions.forEach((session, sessionId) => {
+            const participant = Array.from(session.joined_participants.values())
+                .find(p => p.socketId === socket.id);
+            if (!participant) return;
+
+            const uid = participant.uid;
+            session.joined_participants.delete(uid);
+            console.log(`[handleDisconnect] User ${uid} removed from Sign session ${sessionId}, state=${session.state}`);
+
+            // Helper to notify a socket about disconnect
+            const notifyDisconnect = (targetSocketId: string) => {
+                const pSocket = this.connections.get(targetSocketId);
+                if (pSocket) {
+                    this.send(pSocket.ws, {
+                        type: 'Info',
+                        payload: { message: `user ${uid} disconnected from session ${sessionId}` }
+                    });
+                }
+            };
+
+            // Helper to notify a socket about session abort
+            const notifyAbort = (targetSocketId: string) => {
+                const pSocket = this.connections.get(targetSocketId);
+                if (pSocket) {
+                    this.send(pSocket.ws, {
+                        type: 'SessionAborted',
+                        payload: { session: sessionId, reason: `Participant ${uid} disconnected` }
+                    });
+                }
+            };
+
+            // Helper to notify ALL configured participants (not just joined ones)
+            const notifyAllParticipants = (notifyFn: (socketId: string) => void) => {
+                const notifiedSockets = new Set<string>();
+                session.participants_pubs.forEach(([_, pubKey]) => {
+                    const pubKeyStr = typeof pubKey === 'string' ? pubKey : pubKey.key;
+                    const normalizedPubKey = pubKeyStr.toLowerCase().replace('0x', '');
+
+                    this.connections.forEach(conn => {
+                        if (conn.publicKey && conn.id !== socket.id && !notifiedSockets.has(conn.id)) {
+                            const connPubKey = conn.publicKey.toLowerCase().replace('0x', '');
+                            if (connPubKey === normalizedPubKey) {
+                                notifyFn(conn.id);
+                                notifiedSockets.add(conn.id);
+                            }
+                        }
+                    });
+                });
+                // Also notify the session creator if not already notified and not the disconnecting user
+                if (session.creatorSocketId !== socket.id && !notifiedSockets.has(session.creatorSocketId)) {
+                    notifyFn(session.creatorSocketId);
+                }
+            };
+
+            if (session.state === 'Pending') {
+                notifyAllParticipants(notifyDisconnect);
+            } else if (session.state === 'Round1' || session.state === 'Round2') {
+                // Session already started - must abort since protocol cannot recover
+                session.state = 'Failed';
+                notifyAllParticipants(notifyAbort);
+            }
+        });
     }
 
     private send(ws: WebSocket, msg: ServerMsg) {
@@ -186,6 +318,17 @@ export class FServer {
                 const sessionID = uuidv4();
                 const { min_signers, max_signers, group_id, participants, participants_pubs } = msg.payload;
 
+                // Validate: all public keys must be unique
+                const normalizedKeys = participants_pubs.map(([_, pubKey]: [number, RosterPublicKey]) => {
+                    const keyStr = typeof pubKey === 'string' ? pubKey : pubKey.key;
+                    return keyStr.toLowerCase().replace('0x', '');
+                });
+                const uniqueKeys = new Set(normalizedKeys);
+                if (uniqueKeys.size !== normalizedKeys.length) {
+                    this.send(socket.ws, { type: 'Error', payload: { message: 'All participant public keys must be unique' } });
+                    return;
+                }
+
                 const session: DKGSession = {
                     id: sessionID,
                     creatorSocketId: socket.id,
@@ -203,6 +346,38 @@ export class FServer {
 
                 this.dkgSessions.set(sessionID, session);
                 this.send(socket.ws, { type: 'DKGSessionCreated', payload: { session: sessionID } });
+
+                // Broadcast new session only to participants in the session
+                const newSessionSummary = {
+                    session: session.id,
+                    creator_suid: 1, // Creator is participant 1 by convention
+                    group_id: session.group_id,
+                    min_signers: session.min_signers,
+                    max_signers: session.max_signers,
+                    participants: session.participants_config,
+                    participants_pubs: session.participants_pubs,
+                    joined: [] as number[],
+                    created_at: new Date(session.created_at).toISOString()
+                };
+
+                // Only notify users whose public keys are in sessions.participants_pubs
+                const notifiedSockets = new Set<string>();
+                session.participants_pubs.forEach(([_, pubKey]) => {
+                    const pubKeyStr = typeof pubKey === 'string' ? pubKey : pubKey.key;
+                    const normalizedPubKey = pubKeyStr.toLowerCase().replace('0x', '');
+
+                    this.connections.forEach(conn => {
+                        // Skip creator and already notified sockets
+                        if (conn.id === socket.id || notifiedSockets.has(conn.id)) return;
+                        if (!conn.publicKey) return;
+
+                        const connPubKey = conn.publicKey.toLowerCase().replace('0x', '');
+                        if (connPubKey === normalizedPubKey) {
+                            this.send(conn.ws, { type: 'NewDKGSession', payload: newSessionSummary });
+                            notifiedSockets.add(conn.id);
+                        }
+                    });
+                });
                 break;
             }
 
@@ -236,11 +411,31 @@ export class FServer {
 
                 this.send(socket.ws, { type: 'Info', payload: { message: `Joined session ${sid} as participant ${suid}` } });
 
-                // Broadcast update
-                session.joined_participants.forEach(p => {
-                    const pSocket = this.connections.get(p.socketId);
-                    if (pSocket) this.send(pSocket.ws, { type: 'Info', payload: { message: `participant ${suid} joined session ${sid}` } });
+                // Broadcast update to ALL configured participants in the session (not just those who joined)
+                // Find connected users whose public keys match session.participants_pubs
+                const notifiedSockets = new Set<string>();
+                session.participants_pubs.forEach(([_, pubKey]) => {
+                    const pubKeyStr = typeof pubKey === 'string' ? pubKey : pubKey.key;
+                    const normalizedPubKey = pubKeyStr.toLowerCase().replace('0x', '');
+
+                    // Find the connected socket with this public key (including the joiner)
+                    this.connections.forEach(conn => {
+                        if (conn.publicKey && !notifiedSockets.has(conn.id)) {
+                            const connPubKey = conn.publicKey.toLowerCase().replace('0x', '');
+                            if (connPubKey === normalizedPubKey) {
+                                this.send(conn.ws, { type: 'Info', payload: { message: `participant ${suid} joined session ${sid}` } });
+                                notifiedSockets.add(conn.id);
+                            }
+                        }
+                    });
                 });
+                // Also notify the session creator if they weren't already notified and aren't the joiner
+                if (session.creatorSocketId !== socket.id && !notifiedSockets.has(session.creatorSocketId)) {
+                    const creatorSocket = this.connections.get(session.creatorSocketId);
+                    if (creatorSocket) {
+                        this.send(creatorSocket.ws, { type: 'Info', payload: { message: `participant ${suid} joined session ${sid}` } });
+                    }
+                }
 
                 // Check if all joined
                 console.log(`Session ${sid}: Joined ${session.joined_participants.size} / ${session.max_signers}`);
@@ -252,18 +447,37 @@ export class FServer {
             }
 
             case 'ListPendingDKGSessions': {
+                if (!socket.publicKey) {
+                    this.send(socket.ws, { type: 'Error', payload: { message: 'Must login first' } });
+                    return;
+                }
+                const userPubKey = socket.publicKey.toLowerCase().replace('0x', '');
+
                 const list = Array.from(this.dkgSessions.values())
                     .filter(s => s.state !== 'Finalized' && s.state !== 'Failed')
-                    .map(s => ({
-                        session: s.id,
-                        group_id: s.group_id,
-                        min_signers: s.min_signers,
-                        max_signers: s.max_signers,
-                        participants: s.participants_config,
-                        participants_pubs: s.participants_pubs,
-                        joined: Array.from(s.joined_participants.keys()),
-                        created_at: new Date(s.created_at).toISOString() // Rust uses string
-                    }));
+                    // Only show sessions where user is a participant
+                    .filter(s => s.participants_pubs.some(([_, pubKey]) => {
+                        const keyStr = typeof pubKey === 'string' ? pubKey : pubKey.key;
+                        return keyStr.toLowerCase().replace('0x', '') === userPubKey;
+                    }))
+                    .map(s => {
+                        // Find creator's SUID
+                        const creatorParticipant = Array.from(s.joined_participants.values())
+                            .find(p => p.socketId === s.creatorSocketId);
+                        const creatorSuid = creatorParticipant ? creatorParticipant.uid : 1;
+
+                        return {
+                            session: s.id,
+                            creator_suid: creatorSuid,
+                            group_id: s.group_id,
+                            min_signers: s.min_signers,
+                            max_signers: s.max_signers,
+                            participants: s.participants_config,
+                            participants_pubs: s.participants_pubs,
+                            joined: Array.from(s.joined_participants.keys()),
+                            created_at: new Date(s.created_at).toISOString()
+                        };
+                    });
                 this.send(socket.ws, { type: 'PendingDKGSessions', payload: { sessions: list } });
                 break;
             }
@@ -455,6 +669,26 @@ export class FServer {
                 if (session.finalized_uids.size === session.max_signers) {
                     session.state = 'Finalized';
 
+                    // Find creator's SUID for the completed session
+                    const creatorParticipant = Array.from(session.joined_participants.values())
+                        .find(p => p.socketId === session.creatorSocketId);
+                    const creatorSuid = creatorParticipant ? creatorParticipant.uid : 1;
+
+                    // Store in completed sessions for later retrieval
+                    this.completedDKGSessions.set(sid, {
+                        session: sid,
+                        creator_suid: creatorSuid,
+                        group_id: session.group_id,
+                        min_signers: session.min_signers,
+                        max_signers: session.max_signers,
+                        participants: session.participants_config,
+                        participants_pubs: session.participants_pubs,
+                        joined: Array.from(session.joined_participants.keys()),
+                        group_vk_sec1_hex: group_vk_sec1_hex,
+                        created_at: new Date(session.created_at).toISOString(),
+                        completed_at: new Date().toISOString()
+                    });
+
                     // Broadcast Finalized to all participants
                     session.joined_participants.forEach((p) => {
                         const pSocket = this.connections.get(p.socketId);
@@ -506,32 +740,75 @@ export class FServer {
                 // Ack to creator
                 this.send(socket.ws, { type: 'SignSessionCreated', payload: { session: sessionID } });
 
-                // Broadcast to all to notify new available session
-                // NOTE: Real fserver might only notify relevant users or multicast.
-                // But clients often poll anyway.
-                // Let's send a broadcast 'Info' or just let them poll.
+                // Broadcast new session only to participants in the session
+                const newSessionSummary = {
+                    session: session.id,
+                    creator_suid: 1, // Creator is participant 1 by convention
+                    group_id: session.group_id,
+                    threshold: session.threshold,
+                    participants: session.participants_config,
+                    participants_pubs: session.participants_pubs,
+                    message: session.message,
+                    message_hex: session.message_hex,
+                    joined: [] as number[],
+                    created_at: new Date(session.created_at).toISOString()
+                };
+
+                // Only notify users whose public keys are in sessions.participants_pubs
+                const notifiedSockets = new Set<string>();
+                session.participants_pubs.forEach(([_, pubKey]) => {
+                    const pubKeyStr = typeof pubKey === 'string' ? pubKey : pubKey.key;
+                    const normalizedPubKey = pubKeyStr.toLowerCase().replace('0x', '');
+
+                    this.connections.forEach(conn => {
+                        // Skip creator and already notified sockets
+                        if (conn.id === socket.id || notifiedSockets.has(conn.id)) return;
+                        if (!conn.publicKey) return;
+
+                        const connPubKey = conn.publicKey.toLowerCase().replace('0x', '');
+                        if (connPubKey === normalizedPubKey) {
+                            this.send(conn.ws, { type: 'NewSignSession', payload: newSessionSummary });
+                            notifiedSockets.add(conn.id);
+                        }
+                    });
+                });
                 break;
             }
 
             case 'ListPendingSigningSessions': {
+                if (!socket.publicKey) {
+                    this.send(socket.ws, { type: 'Error', payload: { message: 'Must login first' } });
+                    return;
+                }
+                const userPubKey = socket.publicKey.toLowerCase().replace('0x', '');
+
                 const list = Array.from(this.signSessions.values())
                     .filter(s => s.state !== 'Complete' && s.state !== 'Failed')
-                    .map(s => ({
-                        session: s.id,
-                        group_id: s.group_id,
-                        threshold: s.threshold,
-                        participants: s.participants_config,
-                        participants_pubs: s.participants_pubs,
-                        message: s.message,
-                        message_hex: s.message_hex,
-                        status: s.state,
-                        created_at: new Date(s.created_at).toISOString(),
-                        joined: Array.from(s.joined_participants.values()).map(p => ({
-                            // Return simplified participant info for UI
-                            uid: p.uid,
-                            pub_key: typeof p.pubKeyProp === 'string' ? p.pubKeyProp : p.pubKeyProp?.key
-                        }))
-                    }));
+                    // Only show sessions where user is a participant
+                    .filter(s => s.participants_pubs.some(([_, pubKey]) => {
+                        const keyStr = typeof pubKey === 'string' ? pubKey : pubKey.key;
+                        return keyStr.toLowerCase().replace('0x', '') === userPubKey;
+                    }))
+                    .map(s => {
+                        // Find creator's SUID
+                        const creatorParticipant = Array.from(s.joined_participants.values())
+                            .find(p => p.socketId === s.creatorSocketId);
+                        const creatorSuid = creatorParticipant ? creatorParticipant.uid : 1;
+
+                        return {
+                            session: s.id,
+                            creator_suid: creatorSuid,
+                            group_id: s.group_id,
+                            threshold: s.threshold,
+                            participants: s.participants_config,
+                            participants_pubs: s.participants_pubs,
+                            message: s.message,
+                            message_hex: s.message_hex,
+                            status: s.state,
+                            created_at: new Date(s.created_at).toISOString(),
+                            joined: Array.from(s.joined_participants.keys())
+                        };
+                    });
                 this.send(socket.ws, { type: 'PendingSigningSessions', payload: { sessions: list } });
                 break;
             }
@@ -590,11 +867,31 @@ export class FServer {
 
                 // this.send(socket.ws, { type: 'SignSessionJoined', payload: { session: sid } });
 
-                // Broadcast info
-                session.joined_participants.forEach(p => {
-                    const pSocket = this.connections.get(p.socketId);
-                    if (pSocket) this.send(pSocket.ws, { type: 'Info', payload: { message: `participant ${suid} joined session ${sid}` } });
+                // Broadcast update to ALL configured participants in the session (not just those who joined)
+                // Find connected users whose public keys match session.participants_pubs
+                const notifiedSockets = new Set<string>();
+                session.participants_pubs.forEach(([_, pubKey]) => {
+                    const pubKeyStr = typeof pubKey === 'string' ? pubKey : pubKey.key;
+                    const normalizedPubKey = pubKeyStr.toLowerCase().replace('0x', '');
+
+                    // Find the connected socket with this public key (excluding the joiner)
+                    this.connections.forEach(conn => {
+                        if (conn.publicKey && !notifiedSockets.has(conn.id)) {
+                            const connPubKey = conn.publicKey.toLowerCase().replace('0x', '');
+                            if (connPubKey === normalizedPubKey) {
+                                this.send(conn.ws, { type: 'Info', payload: { message: `participant ${suid} joined session ${sid}` } });
+                                notifiedSockets.add(conn.id);
+                            }
+                        }
+                    });
                 });
+                // Also notify the session creator if they weren't already notified and aren't the joiner
+                if (session.creatorSocketId !== socket.id && !notifiedSockets.has(session.creatorSocketId)) {
+                    const creatorSocket = this.connections.get(session.creatorSocketId);
+                    if (creatorSocket) {
+                        this.send(creatorSocket.ws, { type: 'Info', payload: { message: `participant ${suid} joined session ${sid}` } });
+                    }
+                }
 
                 // Check if enough joined (Threshold)
                 // Note: Unlike DKG (all N), signing requires T.
@@ -890,6 +1187,33 @@ export class FServer {
             const result = JSON.parse(resultJson);
             session.final_signature = result.signature_bincode_hex;
             session.state = 'Complete';
+
+            // Find creator's SUID for the completed session
+            const creatorParticipant = Array.from(session.joined_participants.values())
+                .find(p => p.socketId === session.creatorSocketId);
+            const creatorSuid = creatorParticipant ? creatorParticipant.uid : 1;
+
+            // Store in completed sessions for later retrieval
+            this.completedSignSessions.set(session.id, {
+                session: session.id,
+                creator_suid: creatorSuid,
+                group_id: session.group_id,
+                threshold: session.threshold,
+                participants: session.participants_config,
+                participants_pubs: session.participants_pubs,
+                joined: Array.from(session.joined_participants.keys()),
+                message: session.message,
+                message_hex: session.message_hex,
+                group_vk_sec1_hex: session.group_vk_sec1_hex,
+                signature: result.signature_bincode_hex,
+                rx: result.rx,
+                ry: result.ry,
+                s: result.s,
+                px: result.px,
+                py: result.py,
+                created_at: new Date(session.created_at).toISOString(),
+                completed_at: new Date().toISOString()
+            });
 
             // Broadcast SignatureReady
             session.joined_participants.forEach(p => {

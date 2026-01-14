@@ -138,7 +138,7 @@ const CompletedSessionsModal = ({ sessions, onClose, onSelect, zIndex }: { sessi
                                 <td><code>{s.session.slice(0, 8)}...</code></td>
                                 <td>{s.group_id}</td>
                                 <td>{s.message}</td>
-                                <td>{new Date(s.created_at).toLocaleString()}</td>
+                                <td>{new Date(s.completed_at || s.created_at).toLocaleString()}</td>
                                 <td><button className="grey-button" onClick={() => onSelect(s)}>View</button></td>
                             </tr>
                         ))}
@@ -801,7 +801,7 @@ function SigningPage() {
                                     </tbody>
                                 </table>
                             </div>
-                            <button onClick={handleAnnounceSigning} className="grey-button" disabled={!isServerConnected || keyPackage.trim() === '' || signingStatus !== 'Connected' || messageHash.trim() === ''}>Announce Signing Session</button>
+                            <button onClick={handleAnnounceSigning} className="grey-button" disabled={!isServerConnected || keyPackage.trim() === '' || (signingStatus !== 'Connected' && signingStatus !== 'Complete') || messageHash.trim() === ''}>Announce Signing Session</button>
                         </div>
                     ) : (
                         <div className="participant-panel">

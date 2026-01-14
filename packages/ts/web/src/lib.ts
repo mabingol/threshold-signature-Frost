@@ -1,4 +1,5 @@
 import React from 'react';
+import toast from 'react-hot-toast';
 import {
     generate_ecdsa_keypair,
     generate_eddsa_keypair,
@@ -152,13 +153,25 @@ export const handleServerMessage = async (
             log('info', `Found ${msg.payload.sessions.length} completed DKG sessions.`);
             break;
 
+        case 'NewDKGSession':
+            // A new session was created by another user - add it to our list
+            log('info', `New DKG session created: ${msg.payload.session}`);
+            toast.success(`New DKG session available: ${msg.payload.group_id}`);
+            setters.setPendingSessions((prev: PendingDKGSession[]) => {
+                // Avoid duplicates
+                if (prev.some(s => s.session === msg.payload.session)) return prev;
+                return [...prev, msg.payload];
+            });
+            break;
+
         case 'Info':
             log('info', `Server Info: ${msg.payload.message}`);
-            // ... (keep regex logic same)
+            // Handle join notifications
             const joinMatch = msg.payload.message.match(/participant (\d+) joined session (\S+)/);
             if (joinMatch) {
                 const joinedSuid = parseInt(joinMatch[1]);
                 const sessionId = joinMatch[2];
+                toast.success(`Participant ${joinedSuid} joined the session`);
                 setters.setPendingSessions((prev: PendingDKGSession[]) =>
                     prev.map(s =>
                         s.session === sessionId
@@ -167,13 +180,32 @@ export const handleServerMessage = async (
                     )
                 );
             }
-            const disconnectMatch = msg.payload.message.match(/user (\d+) disconnected/i);
+            // Handle disconnect notifications (with session ID)
+            const disconnectMatch = msg.payload.message.match(/user (\d+) disconnected from session (\S+)/i);
             if (disconnectMatch) {
                 const disconnectedUid = parseInt(disconnectMatch[1]);
-                log('info', `Participant ${disconnectedUid} has left the session.`);
+                const sessionId = disconnectMatch[2];
+                log('info', `Participant ${disconnectedUid} has left session ${sessionId}.`);
+                toast.error(`Participant ${disconnectedUid} disconnected from session`);
                 setters.setJoinedParticipants((prev: Participant[]) => prev.filter(p => p.uid !== disconnectedUid));
                 setters.setJoinedCount((prev: number) => prev > 0 ? prev - 1 : 0);
+                // Update pending sessions to remove this user from joined list
+                setters.setPendingSessions((prev: PendingDKGSession[]) =>
+                    prev.map(s => s.session === sessionId
+                        ? { ...s, joined: s.joined.filter(uid => uid !== disconnectedUid) }
+                        : s
+                    )
+                );
             }
+            break;
+
+        case 'SessionAborted':
+            log('error', `Session aborted: ${msg.payload.reason}`);
+            toast.error(`Session aborted: ${msg.payload.reason}`);
+            setters.setDkgStatus('Failed');
+            setters.setJoiningSessionId(null);
+            // Refresh session list to see updated state
+            sendMessage(ws.current, { type: 'ListPendingDKGSessions' }, log);
             break;
 
         case 'Challenge':
@@ -475,10 +507,12 @@ export const handleSigningServerMessage = async (
 
         case 'Info':
             log('info', `Server Info: ${msg.payload.message}`);
+            // Handle join notifications
             const joinMatch = msg.payload.message.match(/participant (\d+) joined session (\S+)/);
             if (joinMatch) {
                 const joinedSuid = parseInt(joinMatch[1]);
                 const sessionId = joinMatch[2];
+                toast.success(`Participant ${joinedSuid} joined the signing session`);
                 setters.setPendingSessions((prev: PendingSigningSession[]) =>
                     prev.map(s =>
                         s.session === sessionId
@@ -487,6 +521,29 @@ export const handleSigningServerMessage = async (
                     )
                 );
             }
+            // Handle disconnect notifications (with session ID)
+            const disconnectMatch = msg.payload.message.match(/user (\d+) disconnected from session (\S+)/i);
+            if (disconnectMatch) {
+                const disconnectedUid = parseInt(disconnectMatch[1]);
+                const sessionId = disconnectMatch[2];
+                log('info', `Participant ${disconnectedUid} has left session ${sessionId}.`);
+                toast.error(`Participant ${disconnectedUid} disconnected from signing session`);
+                // Update pending sessions to remove this user from joined list
+                setters.setPendingSessions((prev: PendingSigningSession[]) =>
+                    prev.map(s => s.session === sessionId
+                        ? { ...s, joined: s.joined.filter(uid => uid !== disconnectedUid) }
+                        : s
+                    )
+                );
+            }
+            break;
+
+        case 'SessionAborted':
+            log('error', `Session aborted: ${msg.payload.reason}`);
+            toast.error(`Session aborted: ${msg.payload.reason}`);
+            setters.setSigningStatus('Failed');
+            // Refresh session list to see updated state
+            sendMessage(ws.current, { type: 'ListPendingSigningSessions' }, log);
             break;
 
         case 'PendingSigningSessions':
@@ -497,6 +554,17 @@ export const handleSigningServerMessage = async (
         case 'CompletedSigningSessions':
             setters.setCompletedSessions(msg.payload.sessions);
             log('info', `Found ${msg.payload.sessions.length} completed signing sessions.`);
+            break;
+
+        case 'NewSignSession':
+            // A new session was created by another user - add it to our list
+            log('info', `New signing session created: ${msg.payload.session}`);
+            toast.success(`New signing session available: ${msg.payload.group_id}`);
+            setters.setPendingSessions((prev: PendingSigningSession[]) => {
+                // Avoid duplicates
+                if (prev.some(s => s.session === msg.payload.session)) return prev;
+                return [...prev, msg.payload];
+            });
             break;
 
         case 'SignReadyRound1':

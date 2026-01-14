@@ -147,7 +147,7 @@ const CompletedSessionsModal = ({ sessions, onClose, onSelect, zIndex }: { sessi
                         <tr>
                             <th>Session ID</th>
                             <th>Group</th>
-                            <th>Created</th>
+                            <th>Completed</th>
                             <th>Action</th>
                         </tr>
                     </thead>
@@ -156,7 +156,7 @@ const CompletedSessionsModal = ({ sessions, onClose, onSelect, zIndex }: { sessi
                             <tr key={s.session}>
                                 <td><code>{s.session.slice(0, 8)}...</code></td>
                                 <td>{s.group_id}</td>
-                                <td>{new Date(s.created_at).toLocaleString()}</td>
+                                <td>{new Date(s.completed_at || s.created_at).toLocaleString()}</td>
                                 <td><button className="grey-button" onClick={() => onSelect(s)}>View</button></td>
                             </tr>
                         ))}
@@ -410,6 +410,14 @@ function DkgPage() {
 
         if (roster.some(pubkey => pubkey.trim() === '') || roster.length !== max_signers) {
             toast.error(`All Public Key fields in the roster must be filled and match Max Players (${max_signers}).`);
+            return;
+        }
+
+        // Check for duplicate public keys
+        const normalizedKeys = roster.map(pk => pk.trim().toLowerCase());
+        const uniqueKeys = new Set(normalizedKeys);
+        if (uniqueKeys.size !== normalizedKeys.length) {
+            toast.error('All participant public keys must be unique. Duplicate keys are not allowed.');
             return;
         }
 

@@ -18,6 +18,7 @@ export type PendingDKGSession = {
 };
 export type CompletedDKGSession = PendingDKGSession & {
     group_vk_sec1_hex: string;
+    completed_at?: string;
 };
 
 // Signing Types
@@ -36,4 +37,5 @@ export type PendingSigningSession = {
 };
 export type CompletedSigningSession = PendingSigningSession & {
     signature: string;
+    completed_at?: string;
 };
